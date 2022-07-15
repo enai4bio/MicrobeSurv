@@ -1,0 +1,75 @@
+Bottleneck @ file:///tmp/build/80754af9/bottleneck_1648028895253/work
+Brotli==1.0.9
+certifi==2022.6.15
+charset-normalizer==2.0.12
+colorama @ file:///home/conda/feedstock_root/build_artifacts/colorama_1655412516417/work
+cycler @ file:///tmp/build/80754af9/cycler_1637851556182/work
+dgl==0.8.1
+ecos @ file:///usr/share/miniconda/conda-bld/ecos_1609667466069/work
+feather-format==0.4.1
+fonttools==4.25.0
+future==0.18.2
+googledrivedownloader==0.4
+h5py==3.6.0
+idna==3.3
+isodate==0.6.1
+Jinja2==3.1.1
+joblib @ file:///tmp/build/80754af9/joblib_1635411271373/work
+kiwisolver @ file:///opt/conda/conda-bld/kiwisolver_1638569886207/work
+llvmlite==0.38.0
+MarkupSafe==2.1.1
+matplotlib @ file:///tmp/build/80754af9/matplotlib-suite_1634667019719/work
+mkl-fft==1.2.0
+mkl-random==1.2.0
+mkl-service==2.3.0
+multivolumefile==0.2.3
+munkres==1.1.4
+networkx==2.8
+numba @ file:///opt/conda/conda-bld/numba_1648040517072/work
+numexpr @ file:///tmp/build/80754af9/numexpr_1614798506606/work
+numpy @ file:///tmp/build/80754af9/numpy_and_numpy_base_1603570489231/work
+nvidia-ml-py==11.510.69
+olefile @ file:///home/conda/feedstock_root/build_artifacts/olefile_1602866521163/work
+osqp @ file:///usr/share/miniconda/conda-bld/osqp_1609665178247/work
+pandas==1.4.2
+Pillow==7.1.2
+psutil==5.9.0
+py7zr==0.18.5
+pyarrow==7.0.0
+pybcj==0.5.2
+pycox==0.2.3
+pycryptodomex==3.14.1
+pynndescent @ file:///home/conda/feedstock_root/build_artifacts/pynndescent_1652648933546/work
+pyparsing==3.0.8
+pyppmd==0.18.2
+python-dateutil @ file:///tmp/build/80754af9/python-dateutil_1626374649649/work
+python-louvain==0.16
+pytz==2022.1
+PyYAML==6.0
+pyzstd==0.15.2
+rdflib==6.1.1
+requests==2.27.1
+scikit-learn @ file:///tmp/build/80754af9/scikit-learn_1642617107864/work
+scikit-survival @ file:///usr/share/miniconda/conda-bld/scikit-survival_1650824884636/work
+scipy==1.8.0
+seaborn @ file:///tmp/build/80754af9/seaborn_1629307859561/work
+sip==4.19.13
+six @ file:///home/conda/feedstock_root/build_artifacts/six_1620240208055/work
+texttable==1.6.4
+threadpoolctl==3.1.0
+torch==1.9.1
+torch-cluster==1.5.9
+torch-geometric==2.0.4
+torch-scatter==2.0.9
+torch-sparse==0.6.12
+torch-spline-conv==1.2.1
+torchaudio==0.9.0a0+a85b239
+torchtuples @ file:///home/conda/feedstock_root/build_artifacts/torchtuples_1630448227276/work
+torchvision==0.10.1
+tornado @ file:///tmp/build/80754af9/tornado_1606942300299/work
+tqdm @ file:///home/conda/feedstock_root/build_artifacts/tqdm_1649051611147/work
+typing_extensions @ file:///home/conda/feedstock_root/build_artifacts/typing_extensions_1650370875435/work
+umap-learn @ file:///home/conda/feedstock_root/build_artifacts/umap-learn_1649908154577/work
+urllib3==1.26.9
+yacs==0.1.8
+zipfile-deflate64==0.2.0
