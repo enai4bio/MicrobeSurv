@@ -29,21 +29,6 @@ class PartialHazard(nn.Module):
     def forward(self, x):
         return self.mlp(x)
 
-class MLP2(nn.Module):
-    def __init__(self, in_dim, embed_dim, haz_dim, out_dim, dropout):
-        super().__init__()
-
-        self.embed_layer = nn.Sequential(
-            nn.Linear(in_dim, embed_dim, bias=False),
-            nn.ReLU()
-        )
-
-        self.partial_hazard = PartialHazard(embed_dim, haz_dim, out_dim, dropout)
-
-    def forward(self, x):
-        embed = self.embed_layer(x)
-        return self.partial_hazard(embed)
-
 class MLP(nn.Module):
     def __init__(self, c_in_dim, g_in_dim, c_embed_dim, g_embed_dim, g_hid_layer, haz_dim, out_dim, dropout):
         super().__init__()
@@ -168,103 +153,6 @@ class EarlyStop:
         self.losses.append(loss)
         return False
 
-class GNN_ori(nn.Module):
-    def __init__(self, method, g_in_dim, g_hidden_dim, c_in_dim, c_embed_dim, haz_dim, out_dim, dropout,
-                num_heads=2, pool_ratio=0.5,
-                readout='both', # max, avg
-                fusion='cat' # dot
-                ):
-        super().__init__()
-
-        self.pool = None
-        self.avg_readout = dglnn.AvgPooling()
-        self.max_readout = dglnn.MaxPooling()
-        self.readout = readout
-        self.fusion = fusion
-
-        if method == 'GCN':
-            self.conv1 = dglnn.GraphConv(g_in_dim, g_hidden_dim)
-            self.conv2 = dglnn.GraphConv(g_hidden_dim, g_hidden_dim)
-            self.conv3 = dglnn.GraphConv(g_hidden_dim, g_hidden_dim)
-        elif method == 'GAT':
-            self.conv1 = dglnn.GATConv(g_in_dim, g_hidden_dim, num_heads=num_heads)
-            self.conv2 = dglnn.GATConv(g_hidden_dim, g_hidden_dim, num_heads=num_heads)
-            self.conv3 = dglnn.GATConv(g_hidden_dim, g_hidden_dim, num_heads=num_heads)
-        elif method == 'GIN':
-            lin1 = nn.Linear(g_in_dim, g_hidden_dim)
-            lin2 = nn.Linear(g_hidden_dim, g_hidden_dim)
-            lin3 = nn.Linear(g_hidden_dim, g_hidden_dim)
-            self.conv1 = dglnn.GINConv(lin1, 'sum', learn_eps=True)
-            self.conv2 = dglnn.GINConv(lin2, 'sum', learn_eps=True)
-            self.conv3 = dglnn.GINConv(lin3, 'sum', learn_eps=True)
-        elif method == 'SAG':
-            self.conv1 = dglnn.GraphConv(g_in_dim, g_hidden_dim)
-            self.conv2 = dglnn.GraphConv(g_hidden_dim, g_hidden_dim)
-            self.conv3 = dglnn.GraphConv(g_hidden_dim, g_hidden_dim)
-            self.pool = SAGPool(g_hidden_dim, ratio=pool_ratio)
-
-        g_embed_dim = g_hidden_dim * (2 if readout == 'both' else 1)
-
-        if c_in_dim:
-            self.embed_layer = nn.Sequential(
-                nn.Linear(c_in_dim, c_embed_dim, bias=False),
-                nn.ReLU()
-            )
-            if fusion == 'cat':
-                fusion_dim = g_embed_dim + c_embed_dim
-            else:
-                assert g_embed_dim == c_embed_dim
-                fusion_dim = g_embed_dim
-        else:
-            self.embed_layer = None
-            fusion_dim = g_embed_dim
-
-        self.partial_hazard = PartialHazard(fusion_dim, haz_dim, out_dim, dropout)
-
-    def forward(self, inp_c, inp_n, g, return_hg=False):
-        embed = self.embed_layer(inp_c) if self.embed_layer else None
-
-        x = F.relu(self.conv1(g, inp_n))
-        if len(x.shape) == 3: x = torch.mean(x, dim=1) # GAT
-        if self.readout == 'max':
-            x1 = self.max_readout(g, x)
-        elif self.readout == 'avg':
-            x1 = self.avg_readout(g, x)
-        elif self.readout == 'both':
-            x1 = torch.cat([self.avg_readout(g, x), self.max_readout(g, x)], -1)
-
-        x = F.relu(self.conv2(g, x))
-        if len(x.shape) == 3: x = torch.mean(x, dim=1) # GAT
-        if self.readout == 'max':
-            x2 = self.max_readout(g, x)
-        elif self.readout == 'avg':
-            x2 = self.avg_readout(g, x)
-        elif self.readout == 'both':
-            x2 = torch.cat([self.avg_readout(g, x), self.max_readout(g, x)], -1)
-
-        x = F.relu(self.conv3(g, x))
-        if len(x.shape) == 3: x = torch.mean(x, dim=1) # GAT
-        if self.pool: g, x, _ = self.pool(g, x)
-        if self.readout == 'max':
-            x3 = self.max_readout(g, x)
-        elif self.readout == 'avg':
-            x3 = self.avg_readout(g, x)
-        elif self.readout == 'both':
-            x3 = torch.cat([self.avg_readout(g, x), self.max_readout(g, x)], -1)
-
-        hg = F.relu(x1) + F.relu(x2) + F.relu(x3)
-        if return_hg: return hg
-
-        if embed is None:
-            fusion = hg
-        else:
-            if self.fusion == 'cat':
-                fusion = torch.cat((embed, hg), 1)
-            elif self.fusion == 'dot':
-                fusion = embed * hg
-        out = self.partial_hazard(fusion)
-        return out
-
 class GNN(nn.Module):
     def __init__(self, method, inp_dim, graph, g_dims, c_embed_dim, haz_dim, out_dim, dropout,
                 readout='both', # max, avg
@@ -360,106 +248,6 @@ class D2C:
     def __init__(self, _obj):
         self.__dict__.update(_obj)
 
-class MVP_ori(nn.Module):
-    def __init__(self, method, g_in_dim, g_hidden_dim, c_in_dim, c_embed_dim, haz_dim, out_dim, dropout, pool_ratio,
-                readout='both', # max, mean
-                fusion='cat' # dot
-                ):
-        super().__init__()
-        self.readout = readout
-        self.fusion = fusion
-
-        args = D2C({
-            'hop': 3,
-            'hop_connection': False,
-            'lamb': 2.0,
-            'patience': 100,
-            'sample_neighbor': True,
-            'sparse_attention': True,
-            'structure_learning': False,
-        })
-
-        if method == 'GCN':
-            self.conv1 = GCNConv(g_in_dim, g_hidden_dim)
-            self.conv2 = GCN(g_hidden_dim, g_hidden_dim)
-            self.conv3 = GCN(g_hidden_dim, g_hidden_dim)
-        elif method == 'GIN':
-            self.lin1 = nn.Linear(g_in_dim, g_hidden_dim)
-            self.conv1 = GINConv(self.lin1, train_eps=True)
-            self.conv2 = GATConv(g_hidden_dim, g_hidden_dim)
-            self.conv3 = GATConv(g_hidden_dim, g_hidden_dim)
-
-        self.pool1 = MVPool(g_hidden_dim, pool_ratio, args)
-        self.pool2 = MVPool(g_hidden_dim, pool_ratio, args)
-        self.pool3 = MVPool(g_hidden_dim, pool_ratio, args)
-
-        g_embed_dim = g_hidden_dim * (2 if readout == 'both' else 1)
-
-        if c_in_dim:
-            self.embed_layer = nn.Sequential(
-                nn.Linear(c_in_dim, c_embed_dim, bias=False),
-                nn.ReLU()
-            )
-            if fusion == 'cat':
-                fusion_dim = g_embed_dim + c_embed_dim
-            else:
-                assert g_embed_dim == c_embed_dim
-                fusion_dim = g_embed_dim
-        else:
-            self.embed_layer = None
-            fusion_dim = g_embed_dim
-
-        self.partial_hazard = PartialHazard(fusion_dim, haz_dim, out_dim, dropout)
-
-    def forward(self, x, inp_c, edge_index, batch, hook=None, return_hg=False):
-        embed = self.embed_layer(inp_c) if self.embed_layer else None
-
-        edge_attr = None
-
-        x = F.relu(self.conv1(x, edge_index, edge_attr))
-        x, edge_index, edge_attr, batch, perm, score = self.pool1(x, edge_index, edge_attr, batch)
-        if self.readout == 'max':
-            x1 = gmp(x, batch)
-        elif self.readout == 'avg':
-            x1 = gap(x, batch)
-        elif self.readout == 'both':
-            x1 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        if hook: hook(perm, batch, score)
-
-        x = F.relu(self.conv2(x, edge_index, edge_attr))
-        x, edge_index, edge_attr, batch, perm, score = self.pool2(x, edge_index, edge_attr, batch)
-        if self.readout == 'max':
-            x2 = gmp(x, batch)
-        elif self.readout == 'avg':
-            x2 = gap(x, batch)
-        elif self.readout == 'both':
-            x2 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        if hook: hook(perm, batch, score)
-
-        x = F.relu(self.conv3(x, edge_index, edge_attr))
-        x, edge_index, edge_attr, batch, perm, score = self.pool3(x, edge_index, edge_attr, batch)
-        if self.readout == 'max':
-            x3 = gmp(x, batch)
-        elif self.readout == 'avg':
-            x3 = gap(x, batch)
-        elif self.readout == 'both':
-            x3 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        if hook: hook(perm, batch, score)
-
-        hg = F.relu(x1) + F.relu(x2) + F.relu(x3)
-        if return_hg: return hg
-
-        if embed is None:
-            fusion = hg
-        else:
-            if self.fusion == 'cat':
-                fusion = torch.cat((embed, hg), 1)
-            elif self.fusion == 'dot':
-                fusion = embed * hg
-        out = self.partial_hazard(fusion)
-        return out
-
-
 class MVP(nn.Module):
     def __init__(self, method, inp_dim, graph, g_dims, c_embed_dim, haz_dim, out_dim, dropout, pool_ratio,
                 readout='both', # max, mean
@@ -488,7 +276,7 @@ class MVP(nn.Module):
                 convs = [GCNConv(g_dims[0], g_dims[1]),
                         GCN(g_dims[1], g_dims[2]),
                         GCN(g_dims[2], g_dims[3])]
-            elif method == 'GIN':
+            else:
                 convs = [GINConv(nn.Linear(g_dims[0], g_dims[1]), train_eps=True),
                         GATConv(g_dims[1], g_dims[2]),
                         GATConv(g_dims[2], g_dims[3])]

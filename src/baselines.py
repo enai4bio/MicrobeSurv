@@ -48,13 +48,14 @@ def sksurv(train, test, method_name, graph=None, print=tqdm.tqdm.write):
     # >= sksurv.metrics.concordance_index_ipcw
     train_C = model.score(X_train, y_train)
     test_C = model.score(X_test, y_test)
+    test_pred = model.predict(X_test)
 
     test_surv_fn = model.predict_survival_function(X_test)
     test_surv_df = pd.DataFrame(np.stack([fn.y for fn in test_surv_fn],axis=1), index=test_surv_fn[0].x)
     test_Ctd, test_IBS = eval_surv(test_surv_df, test)
 
     print(f'[{method_name}] [train] C: {train_C:.4f} | [test] C: {test_C:.4f}, Ctd: {test_Ctd:.4f}, IBS: {test_IBS:.4f} | time: {datetime.now() - start_time}')
-    return train_C, test_C, test_Ctd, test_IBS
+    return train_C, test_C, test_Ctd, test_IBS, test_pred
 
 class LRScheduler(Callback):
     def __init__(self, lr, lr_decay=0.01):
@@ -129,7 +130,7 @@ def pycox(train, test, method_name, graph=None, lr=LR, net_param=None,
             fusion = G_FUSION
         out_dim = 1 if method is CoxPH else INTERVALS
         net = GNN(method_name[:3], inp_dim, graph.to(DEVICE), g_dims, c_embed_dim, haz_dim, out_dim, dropout, readout=readout, fusion=fusion)
-    elif method_name.startswith('MVP'):
+    elif method_name.startswith('MicrobeSurv'):
         g_dims = [G_INP_DIM] + [G_HID_DIM] * G_HID_LAYER
         c_embed_dim = EMB_DIM
         haz_dim = HAZ_DIM
@@ -205,6 +206,8 @@ def pycox(train, test, method_name, graph=None, lr=LR, net_param=None,
         train_C = concordance_index_censored(train.event.astype(bool), train.time, train_pred.squeeze())[0]
         test_pred = model.predict(x_test)
         test_C = concordance_index_censored(test.event.astype(bool), test.time, test_pred.squeeze())[0]
+    else:
+        test_pred = model.predict(x_test).mean(1)
 
     test_surv_df = model.predict_surv_df(x_test)
     test_Ctd, test_IBS = eval_surv(test_surv_df, test)
@@ -216,7 +219,7 @@ def pycox(train, test, method_name, graph=None, lr=LR, net_param=None,
     if return_fusion:
         return model, model.net(torch.tensor(x_test).to(DEVICE), return_fusion=return_fusion).cpu()
     
-    return train_C, test_C, test_Ctd, test_IBS
+    return train_C, test_C, test_Ctd, test_IBS, test_pred
 
 def gen_data_for_graph_model(x, dim, g, is_mvp=False):
     inp_c = x[:, :dim]

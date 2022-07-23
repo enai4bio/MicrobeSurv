@@ -13,6 +13,7 @@ import seaborn as sns
 from pathlib import Path
 from functools import partial
 import matplotlib.pyplot as plt
+from lifelines import KaplanMeierFitter
 from sklearn.model_selection import StratifiedKFold
 
 def set_mode(dataset, mode):
@@ -113,7 +114,7 @@ def run_benchmark(dataset, mode='cli_g85', trial=TRIAL):
     for a, b in params: print(f'\t{a}: {b}')
 
     print_title(f'{trial} trials {K}-fold cross validation')
-    result = K_fold_performance(data, g, gn, trial)
+    result, _ = K_fold_performance(data, g, gn, trial)
     result.to_csv(out)
     print_title('final result')
     print(result.filter(regex='^avg').replace('nan±nan', '-'))
@@ -126,7 +127,7 @@ def K_fold_performance(data, g, gn, trial_num):
         ['Nnet-survival', baselines.pycox, False],
         ['PMF', baselines.pycox, False],
         ['DeepHit', baselines.pycox, False],
-        ['MLP', baselines.pycox, False],
+        # ['MLP', baselines.pycox, False],
         # ['MLP_Multi', baselines.pycox, True],
         # ['MLP', baselines.coxbased, False],
         # [f'MLP_Surv_{INTERVALS}', baselines.noncox, False],
@@ -158,6 +159,10 @@ def run_K_fold(tasks, data, g, trial_num):
     result = None
     for trial in tqdm.trange(trial_num):
         tqdm.tqdm.write(f'\nTrial {trial+1}:')
+        record = data[['event','time']]
+        for name, *_ in tasks:
+            record[f'{name}_p'] = record[f'{name}_c'] = None
+
         for fold_k, (train_index, test_index) in enumerate(kf.split(data.index, data.event)):
             tqdm.tqdm.write(f'\nFold {fold_k+1} [train] {len(train_index)} [test] {len(test_index)}:')
             train = data.iloc[train_index]
@@ -167,9 +172,13 @@ def run_K_fold(tasks, data, g, trial_num):
             for name, func, need_graph, *params in tasks:
                 params = params[0] if params else {}
                 if need_graph and g is None: continue
-                arr.append([name, *func(train, test, name, g, **params)])
+                *r, pred_test = func(train, test, name, g, **params)
+                record.iloc[test_index, record.columns.to_list().index(f'{name}_p')] = pred_test
+                record.iloc[test_index, record.columns.to_list().index(f'{name}_c')] = (pred_test > np.median(pred_test)).astype(int)
+                arr.append([name, *r])
 
-            fold_result = pd.DataFrame(arr, columns=['method', f'T{trial+1}_F{fold_k+1}_train_C', f'T{trial+1}_F{fold_k+1}_test_C', f'T{trial+1}_F{fold_k+1}_test_Ctd', f'T{trial+1}_F{fold_k+1}_test_IBS'])
+            cols = ['method', f'T{trial+1}_F{fold_k+1}_train_C', f'T{trial+1}_F{fold_k+1}_test_C', f'T{trial+1}_F{fold_k+1}_test_Ctd', f'T{trial+1}_F{fold_k+1}_test_IBS']
+            fold_result = pd.DataFrame(arr, columns=cols)
             fold_result.set_index('method', inplace=True)
 
             if result is None:
@@ -192,7 +201,7 @@ def run_K_fold(tasks, data, g, trial_num):
     result['avg_test_Ctd (%)'] = [f'{a:.2f}±{b:.2f}' for a, b in zip(test_ctd.mean(1), test_ctd.var(1))]
     result['avg_test_IBS (%)'] = [f'{a:.2f}±{b:.2f}' for a, b in zip(test_IBS.mean(1), test_IBS.var(1))]
 
-    return result
+    return result, record
 
 def grid_search(dataset, mode='cli_g85', trial=TRIAL):
     data, g, gn = set_mode(dataset, mode)
@@ -259,337 +268,6 @@ def grid_search(dataset, mode='cli_g85', trial=TRIAL):
     for i in sorted_r[-10:].index:
         i = int(i[-4:])
         print(i, combinations[i])
-
-def visualize_microbiome_graph_k_fold(data, graphs, gname='UnD'):
-    global node_taxid, cnt
-    model_dir = Path('../model')
-    graph = graphs[gname]
-    method = 'MVPGAT'
-
-    if (model_dir / f'{method}_{gname}_r{MVPOOL_RATIO}_f1.pt').exists():
-        test_loader = DataLoader(Dataset(data), batch_size=data.shape[0], shuffle=False)
-        gn = graph.num_nodes()
-        g2i = {g:i for i, g in enumerate(data.columns[-gn:].map(int))}
-        inp_dim_n = 1
-        inp_dim_g = data.shape[1] - 2 - gn
-        hid_dim_n = 64
-        hid_dim_g = 64
-
-        ArgStruct = namedtuple('args', 'dropout_ratio hop hop_connection lamb nhid ginp ghid patience pooling_ratio sample_neighbor sparse_attention structure_learning num_features num_classes')
-        args = ArgStruct(
-            dropout_ratio=0.1,
-            hop=3,
-            hop_connection=False,
-            lamb=2.0,
-            nhid=hid_dim_n,
-            ginp=inp_dim_g,
-            ghid=hid_dim_g,
-            patience=100,
-            pooling_ratio=MVPOOL_RATIO,
-            sample_neighbor=True,
-            sparse_attention=True,
-            structure_learning=False,
-            num_features=inp_dim_n,
-            num_classes=1
-        )
-
-        def plot_heatmap(mat, df, not_found, out, **kwargs):
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 10),
-                                gridspec_kw={'width_ratios': [1, 30], 'wspace':-0.25},
-                                sharey=True)
-
-            colors = ['#9AEBA3', '#0FC2C0']
-            df.event = df.event.astype(int)
-            df.index.name = 'Patients'
-            df['y'] = np.arange(len(df))+0.1
-            for e in range(2):
-                ax1.barh(df.y[df.event==e], df.time[df.event==e],
-                        align='edge', color=colors[e], label=e)
-            sns.despine(left=True, right=True)
-            ax1.invert_xaxis()
-            ax1.set_xticks([0,400])
-            ax1.set_xticklabels([0,400], fontsize=5)
-            ax1.set_xlabel('time', fontsize=5)
-            ax1.legend(ncol=1, frameon=False, fontsize=5)
-
-            mask = mat.numpy()==0
-            sns.heatmap(mat, mask=mask, cmap="YlGnBu", square=True, 
-                            cbar_kws={"shrink": .5}, linewidths=.5,
-                            xticklabels=False, yticklabels=False, 
-                            ax=ax2,
-                            **kwargs)
-
-            ticks, labels = zip(*[(g2i[taxid]+0.5, g) for taxid, g in KEY_GENUS.items()])
-            ax2.set_xticks(ticks, labels, rotation=-90, fontsize=3)
-            for g in not_found:
-                ax2.get_xticklabels()[labels.index(g)].set_color('red')
-
-            plt.savefig(out, dpi=300, bbox_inches="tight")
-            plt.close()
-
-        def hook(perm, batch, score, df):
-            global node_taxid, cnt
-            cnt += 1
-            m = batch[-1] + 1
-            n = torch.div(batch.shape[0], m, rounding_mode='trunc')
-            node_taxid = node_taxid.flatten()[perm].view(m,n)
-            print(f'total: {node_taxid.shape}, unique node: {len(node_taxid.unique())}')
-            
-            if cnt == 3:
-                not_found = [KEY_GENUS[g] for g in KEY_GENUS if g not in node_taxid.unique()]
-                print(f'has {len(KEY_GENUS)-len(not_found)}/{len(KEY_GENUS)} key genus, not found:')
-                print(not_found)
-                print(node_taxid)
-                score = score.view(m,n)
-                img = f'../img/{method}_Und_r{MVPOOL_RATIO}_f{fold_i+1}.png'
-                mat = torch.zeros(m, gn)
-                for i in range(m):
-                    for j in range(n):
-                        mat[i, g2i[node_taxid[i, j].item()]] = score[i, j]
-                plot_heatmap(mat, df, not_found, img)
-
-        model = MVPoolGraphModel(args).to(DEVICE)
-        for fold_i in range(K):
-            node_taxid = torch.IntTensor([data.columns[-graph.num_nodes():].map(int)] * data.shape[0])
-            cnt = 0
-
-            print(f'Fold {fold_i+1}:')
-            model.load_state_dict(torch.load(model_dir / f'{method}_Und_r{MVPOOL_RATIO}_f{fold_i+1}.pt', map_location=DEVICE))
-            model.eval()
-            with torch.no_grad():
-                for x, y in test_loader:
-                    x, yevent, ytime, ind = map(lambda d: d.to(DEVICE), sort_data2(x, y))
-                    inp_n = x[:, inp_dim_g:]
-                    inp_n = inp_n.reshape(-1).unsqueeze(1)
-                    inp_g = x[:, :inp_dim_g]
-                    batch_g = dgl.batch([graph] * x.shape[0])
-                    edge_index = torch.stack(batch_g.edges()).to(DEVICE)
-                    which_graph = torch.tensor([[i] * graph.num_nodes() for i in range(x.shape[0])]).flatten().to(DEVICE)
-                    
-                    df = pd.DataFrame(torch.stack([yevent, ytime]).T, columns=['event', 'time'], index=data.index[ind])
-                    hook_fn = partial(hook, df=df)
-                    p = model(inp_n, inp_g, edge_index, which_graph, hook=hook_fn)
-                    loss = neg_log_likelihood(p, ytime, yevent)
-                    test_cindex = concordance_index(ytime, -p[:,0], yevent)
-
-                    print(f'loss: {loss.item():.4f}, Ctd: {test_cindex:.4f}')
-
-    else:
-        kf = StratifiedKFold(n_splits=K, random_state=GLOBALSEED, shuffle=True)
-        result = None
-        print(f'Params: [Batch] {BATCH} [LR] {LR} [Epochs] {EPOCHS} [Dropout] {DROPOUT} [SAGPool_ratio] {SAGPOOL_RATIO} [K-fold] {K} [Trial] {TRIAL} [Device] {DEVICE}\n')
-
-        for fold_k, (train_index, test_index) in enumerate(kf.split(data.index, data.event)):
-            print(f'Fold {fold_k+1} [train] {len(train_index)} [test] {len(test_index)}:')
-            train = data.iloc[train_index]
-            test = data.iloc[test_index]
-
-            fold_result = pd.DataFrame([
-                # ['GAT_Und', *test_GNN(train, test, graphs['UnD'], 'GAT_UnD', save_model=f'../model/GAT_Und_f{fold_k+1}.pt')],
-                [f'{method}_{gname}', *test_MVPool(train, test, graphs[gname], f'{method}_{gname}', save_model=f'../model/{method}_{gname}_r{MVPOOL_RATIO}_f{fold_k+1}.pt')],
-            ] if graphs else [], columns=['method', f'F{fold_k+1}_train_cindex', f'F{fold_k+1}_test_cindex', f'F{fold_k+1}_test_IBS'])
-            fold_result.set_index('method', inplace=True)
-
-            if result is None:
-                result = fold_result
-            else:
-                result = result.merge(fold_result, left_index=True, right_index=True)
-            print()
-
-        train_ctd = result.filter(regex='F\d_train_cindex') * 100
-        test_ctd = result.filter(regex='F\d_test_cindex') * 100
-        test_IBS = result.filter(regex='F\d_test_IBS') * 100
-        result['avg_train_Ctd (%)'] = [f'{a:.2f}±{b:.2f}' for a, b in zip(train_ctd.mean(1), train_ctd.var(1))]
-        result['avg_test_Ctd (%)'] = [f'{a:.2f}±{b:.2f}' for a, b in zip(test_ctd.mean(1), test_ctd.var(1))]
-        result['avg_test_IBS (%)'] = [f'{a:.2f}±{b:.2f}' for a, b in zip(test_IBS.mean(1), test_IBS.var(1))]
-
-        print(result.filter(regex='^avg').replace('nan±nan', '-'))
-
-def visualize_microbiome_graph(data, graphs, gname='UnD'):
-    global node_taxid, cnt
-    model_dir = Path('../model')
-    graph = graphs[gname]
-    method = 'MVPGAT'
-
-    if (model_dir / f'{method}_{gname}_r{MVPOOL_RATIO}_all.pt').exists():
-        test_loader = DataLoader(Dataset(data), batch_size=data.shape[0], shuffle=False)
-        gn = graph.num_nodes()
-        g2i = {g:i for i, g in enumerate(graphs['ori_cols'].map(int))}
-        inp_dim_n = 1
-        inp_dim_g = data.shape[1] - 2 - gn
-        hid_dim_n = 64
-        hid_dim_g = 64
-
-        ArgStruct = namedtuple('args', 'dropout_ratio hop hop_connection lamb nhid ginp ghid patience pooling_ratio sample_neighbor sparse_attention structure_learning num_features num_classes')
-        args = ArgStruct(
-            dropout_ratio=0.1,
-            hop=3,
-            hop_connection=False,
-            lamb=2.0,
-            nhid=hid_dim_n,
-            ginp=inp_dim_g,
-            ghid=hid_dim_g,
-            patience=100,
-            pooling_ratio=MVPOOL_RATIO,
-            sample_neighbor=True,
-            sparse_attention=True,
-            structure_learning=False,
-            num_features=inp_dim_n,
-            num_classes=1
-        )
-
-        def plot_heatmap(mat, df, not_found, out, **kwargs):
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 10),
-                                gridspec_kw={'width_ratios': [1, 30], 'wspace':-0.25},
-                                sharey=True)
-
-            colors = ['#9AEBA3', '#0FC2C0']
-            df.event = df.event.astype(int)
-            df.index.name = 'Patients'
-            df['y'] = np.arange(len(df))+0.1
-            for e in range(2):
-                ax1.barh(df.y[df.event==e], df.time[df.event==e],
-                        align='edge', color=colors[e], label=e)
-            sns.despine(left=True, right=True)
-            ax1.invert_xaxis()
-            ax1.set_xticks([0,400])
-            ax1.set_xticklabels([0,400], fontsize=5)
-            ax1.set_xlabel('time', fontsize=5)
-            ax1.legend(ncol=1, frameon=False, fontsize=5)
-
-            mask = mat.numpy()==0
-            # # min_max
-            for i in range(mat.shape[0]):
-                min = mat[i, ~mask[i]].min()
-                max = mat[i, ~mask[i]].max()
-                mat[i, ~mask[i]] = (mat[i, ~mask[i]] - min) / (max - min)
-            
-            # standard scala
-            # for i in range(mat.shape[0]):
-            #     u = mat[i, ~mask[i]].mean()
-            #     std = mat[i, ~mask[i]].std()
-            #     mat[i, ~mask[i]] = (mat[i, ~mask[i]] - u) / std
-            
-            sns.heatmap(mat, mask=mask, cmap="YlGnBu", square=True, 
-                            cbar_kws={"shrink": .5}, linewidths=.5,
-                            xticklabels=False, yticklabels=False, 
-                            ax=ax2,
-                            **kwargs)
-            # breakpoint()
-            ticks, labels = zip(*[(g2i[taxid]+0.5, g) for taxid, g in KEY_GENUS.items()])
-            ax2.set_xticks(ticks, labels, rotation=-90, fontsize=3)
-            for g in not_found:
-                ax2.get_xticklabels()[labels.index(g)].set_color('red')
-
-            plt.savefig(out, dpi=300, bbox_inches="tight")
-            plt.close()
-
-            k = 30
-            score, indices = mat.mean(0).topk(k)
-            topk = graphs['ori_cols'][indices]
-            topk_n = [TAXID_NAME[i] for i in topk]
-            print(f'top {k}: {topk_n}')
-            print(f'find: {set(topk_n) & set(KEY_GENUS.values())}')
-            print(topk)
-
-        def plot_heatmap_horizon(mat, df, not_found, out, **kwargs):
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8),
-                                gridspec_kw={'height_ratios': [1, 20], 'hspace':-0.1},
-                                sharex=True)
-
-            colors = ['#9AEBA3', '#0FC2C0']
-            df.event = df.event.astype(int)
-            df.index.name = 'Patients'
-            df['x'] = np.arange(len(df), 0, -1)+0.1
-            for e in range(2):
-                ax1.bar(df.x[df.event==e], df.time[df.event==e],
-                        align='edge', color=colors[e], label=e)
-            sns.despine(right=True, top=True, bottom=True)
-            ax1.set_yticks([0,400])
-            ax1.set_yticklabels([0,400], fontsize=5)
-            ax1.set_ylabel('time', fontsize=5, rotation=0)
-            ax1.legend(ncol=1, frameon=False, fontsize=5)
-
-            mask = mat.numpy()==0
-            # # min_max
-            for i in range(mat.shape[0]):
-                min = mat[i, ~mask[i]].min()
-                max = mat[i, ~mask[i]].max()
-                mat[i, ~mask[i]] = (mat[i, ~mask[i]] - min) / (max - min)
-            
-            # standard scala
-            # for i in range(mat.shape[0]):
-            #     u = mat[i, ~mask[i]].mean()
-            #     std = mat[i, ~mask[i]].std()
-            #     mat[i, ~mask[i]] = (mat[i, ~mask[i]] - u) / std
-            
-            hm = sns.heatmap(mat.T, mask=mask.T, cmap="YlGnBu", square=True, 
-                            cbar_kws={"shrink": .5}, linewidths=.5,
-                            xticklabels=False, yticklabels=False, 
-                            ax=ax2, cbar=False,
-                            **kwargs)
-            # breakpoint()
-            ticks, labels = zip(*[(g2i[taxid]+0.5, g) for taxid, g in KEY_GENUS.items()])
-            ax2.set_yticks(ticks, labels, fontsize=4)
-            for g in not_found:
-                ax2.get_yticklabels()[labels.index(g)].set_color('red')
-            ax2.set_xlabel('samples', fontsize=8)
-
-            plt.savefig(out, dpi=300, bbox_inches="tight")
-            plt.close()
-
-            k = 30
-            score, indices = mat.mean(0).topk(k)
-            topk = graphs['ori_cols'][indices]
-            topk_n = [TAXID_NAME[i] for i in topk]
-            print(f'top {k}: {topk_n}')
-            print(f'find: {set(topk_n) & set(KEY_GENUS.values())}')
-            print(topk)
-
-
-        def hook(perm, batch, score, df):
-            global node_taxid, cnt
-            cnt += 1
-            m = batch[-1] + 1
-            n = torch.div(batch.shape[0], m, rounding_mode='trunc')
-            node_taxid = node_taxid.flatten()[perm].view(m,n)
-            print(f'total: {node_taxid.shape}, unique node: {len(node_taxid.unique())}')
-            
-            if cnt == 3:
-                not_found = [KEY_GENUS[g] for g in KEY_GENUS if g not in node_taxid.unique()]
-                print(f'has {len(KEY_GENUS)-len(not_found)}/{len(KEY_GENUS)} key genus, not found:')
-                print(not_found)
-                print(node_taxid)
-                score = score.view(m,n)
-                img = f'../img/{method}_{gname}_r{MVPOOL_RATIO}_all_minmax_horizon.png'
-                mat = torch.zeros(m, len(g2i))
-                for i in range(m):
-                    for j in range(n):
-                        mat[i, g2i[node_taxid[i, j].item()]] = score[i, j]
-                plot_heatmap_horizon(mat, df, not_found, img)
-
-
-        node_taxid = torch.IntTensor([data.columns[-gn:].map(int)] * data.shape[0])
-        cnt = 0
-        model = MVPoolGATModel(args).to(DEVICE)
-        model.load_state_dict(torch.load(model_dir / f'{method}_{gname}_r{MVPOOL_RATIO}_all.pt', map_location=DEVICE))
-        model.eval()
-        with torch.no_grad():
-            for x, y in test_loader:
-                x, yevent, ytime, ind = map(lambda d: d.to(DEVICE), sort_data2(x, y))
-                inp_n = x[:, inp_dim_g:]
-                inp_n = inp_n.reshape(-1).unsqueeze(1)
-                inp_g = x[:, :inp_dim_g]
-                batch_g = dgl.batch([graph] * x.shape[0])
-                edge_index = torch.stack(batch_g.edges()).to(DEVICE)
-                which_graph = torch.tensor([[i] * graph.num_nodes() for i in range(x.shape[0])]).flatten().to(DEVICE)
-
-                df = pd.DataFrame(torch.stack([yevent, ytime]).T, columns=['event', 'time'], index=data.index[ind])
-                hook_fn = partial(hook, df=df)
-                p = model(inp_n, inp_g, edge_index, which_graph, hook=hook_fn)
-
-    else:
-        test_MVPool(data, data, graphs[gname], f'{method}_{gname}', save_model=f'../model/{method}_{gname}_r{MVPOOL_RATIO}_all.pt')
 
 def reduction_plot(x, hue_data, style_data, method='tsne'):
     data = pd.DataFrame([])
@@ -740,6 +418,51 @@ def visualization(method='GCN', mode='cli_g85'):
     hook_fn = partial(hook, df=data[['event', 'time']])
     model.net(test, hook=hook_fn)
 
+def kmplot(mode):
+    print_title(f'Kaplan Meier plot for all models')
+    data, g, gn = set_mode(dataset, mode)
+
+    tasks = [
+        ['CPH', baselines.sksurv, False],
+        ['RSF', baselines.sksurv, False],
+        ['DeepSurv', baselines.pycox, False],
+        ['Nnet-survival', baselines.pycox, False],
+        ['PMF', baselines.pycox, False],
+        ['DeepHit', baselines.pycox, False],
+        [f'GCN', baselines.pycox, True],
+        [f'GAT', baselines.pycox, True],
+        [f'MicrobeSurv', baselines.pycox, False],
+    ]
+
+    for seed in [42, 2022, 666, 888, 2047, 0, 1]:
+        set_metaverse_seed(seed)
+        print(f'{seed = }')
+
+        result, record = run_K_fold(tasks, data, g, 1)
+        print(result.filter(regex='^avg').replace('nan±nan', '-'))
+
+        cols = 3
+        rows = len(tasks) // cols + int(len(tasks) % cols > 0)
+        fig, axes = plt.subplots(nrows=rows, ncols=cols, figsize=(cols*4, rows*3), sharey=True)
+        plt.subplots_adjust(left=None, bottom=None, right=None, top=None, wspace=0.1, hspace=0.3)
+
+        for nrow in range(rows):
+            for ncol in range(cols):
+                for i in range(2):
+                    j = nrow * cols + ncol
+                    if j >= len(tasks): break
+                    d = record[record[tasks[j][0]+'_c'] == i]
+                    ax = axes[ncol] if rows == 1 else axes[nrow][ncol]
+                    kmf = KaplanMeierFitter()
+                    kmf.fit(d.time, event_observed=d.event)
+                    kmf.plot_survival_function(ax=ax, show_censors=False, label=i, legend=False)
+                    ax.set_title(tasks[j][0])
+                    ax.set_xlabel('')
+
+        plt.savefig(f'mode_{mode}_config_{CONFIG}_seed_{seed}.png', dpi=300)
+        plt.close()
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -747,6 +470,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--trial', type=int, default=TRIAL, help='run n trials k-fold cross validation')
     parser.add_argument('-v', '--visualize', default=False, action='store_true', help='for visualization')
     parser.add_argument('-g', '--gridsearch', default=False, action='store_true', help='for grid search')
+    parser.add_argument('-k', '--kmplot', default=False, action='store_true', help='for Kaplan Meier plot')
     args = parser.parse_args()
 
     watermark()
@@ -755,5 +479,7 @@ if __name__ == '__main__':
         visualization('MVPGINGAT', args.mode)
     elif args.gridsearch:
         grid_search(dataset, args.mode, args.trial)
+    elif args.kmplot:
+        kmplot(args.mode)
     else:
         run_benchmark(dataset, args.mode, args.trial)
