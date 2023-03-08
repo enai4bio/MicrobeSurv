@@ -6,7 +6,7 @@ In our testing, MicrobeSurv demonstrates not only the best performance among oth
 
 ### Architecture
 
-![genome_model](./imgs/model.png)
+![genome_model](./imgs/model3.png)
 
 
 ### Model Trianing and Experiments Repetition
