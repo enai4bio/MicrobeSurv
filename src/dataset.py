@@ -1,4 +1,5 @@
 import dgl
+import collections
 import numpy as np
 import pandas as pd
 from config import *
@@ -192,14 +193,44 @@ df_et_PFS_cli_g202_b3 = batch3_pre_process(b3_PFS_cli_data.copy().merge(b3_micro
 df_et_TTF_cli_b3 = batch3_pre_process(b3_TTF_cli_data.copy(), MinMaxScaler())
 df_et_TTF_cli_g202_b3 = batch3_pre_process(b3_TTF_cli_data.copy().merge(b3_microbes_data, left_index=True, right_index=True), MinMaxScaler())
 
+df_et_OS_cli_g202_b3_nocancer = df_et_OS_cli_g202_b3.drop(labels=df_et_OS_cli_g202_b3.columns[11:29], axis=1)
+df_et_PFS_cli_g202_b3_nocancer = df_et_PFS_cli_g202_b3.drop(labels=df_et_PFS_cli_g202_b3.columns[11:29], axis=1)
+
 df_et_OS_g202_b3 = df_et_OS_cli_g202_b3[['event', 'time']+b3_microbes_data.columns.to_list()]
 df_et_PFS_g202_b3 = df_et_PFS_cli_g202_b3[['event', 'time']+b3_microbes_data.columns.to_list()]
 df_et_TTF_g202_b3 = df_et_TTF_cli_g202_b3[['event', 'time']+b3_microbes_data.columns.to_list()]
 
 _cols = df_et_OS_cli_g202_b3.columns[:11].to_list() + df_et_OS_cli_g202_b3.columns[28:].to_list()
-df_malignant_melanoma = df_et_OS_cli_g202_b3[df_et_OS_cli_g202_b3['悪性黒色腫']==1][_cols].copy() # 55
-df_head_neck = df_et_OS_cli_g202_b3[df_et_OS_cli_g202_b3['頭頸部癌']==1][_cols].copy() # 106
-df_renal_cell = df_et_OS_cli_g202_b3[df_et_OS_cli_g202_b3['腎細胞癌']==1][_cols].copy() # 75
+df_OS_malignant_melanoma = df_et_OS_cli_g202_b3[df_et_OS_cli_g202_b3['悪性黒色腫']==1][_cols].copy() # 55
+df_OS_head_neck = df_et_OS_cli_g202_b3[df_et_OS_cli_g202_b3['頭頸部癌']==1][_cols].copy() # 106
+df_OS_renal_cell = df_et_OS_cli_g202_b3[df_et_OS_cli_g202_b3['腎細胞癌']==1][_cols].copy() # 75
+df_PFS_malignant_melanoma = df_et_PFS_cli_g202_b3[df_et_PFS_cli_g202_b3['悪性黒色腫']==1][_cols].copy() # 55
+df_PFS_head_neck = df_et_PFS_cli_g202_b3[df_et_PFS_cli_g202_b3['頭頸部癌']==1][_cols].copy() # 106
+df_PFS_renal_cell = df_et_PFS_cli_g202_b3[df_et_PFS_cli_g202_b3['腎細胞癌']==1][_cols].copy() # 75
+df_PFS_bladder = df_et_PFS_cli_g202_b3[df_et_PFS_cli_g202_b3['腎盂・尿管・膀胱癌']==1][_cols].copy() # 74
+
+with open('../data/intermediate_data/b3_taxid_lineage.txt', 'r') as f:
+    taxid2phylum = {}
+    taxid2lineage = {}
+    for line in f:
+        if (arr := line.strip().split()):
+            taxid2phylum[arr[0]] = arr[1].split('p__')[1].split(';')[0]
+            taxid2lineage[arr[0]] = arr[1]
+taxoNN_cluster_num = 4
+taxoNN_microbes_p = [taxid2phylum[str(taxid)] for taxid in b3_microbes_data.columns]
+taxoNN_p2i = {item[0]:i for i, item in enumerate(collections.Counter(taxoNN_microbes_p).most_common(taxoNN_cluster_num-1))}
+taxoNN_microbes_cluster = [taxoNN_p2i.get(p, taxoNN_cluster_num-1) for p in taxoNN_microbes_p]
+
+metaDR_microbes_tree = NCBITaxa().get_topology(b3_microbes_data.columns)
+order = []
+for node in metaDR_microbes_tree.traverse(strategy='levelorder'):
+    if node.is_leaf(): order.append(int(node.name))
+postorder = []
+for node in metaDR_microbes_tree.traverse(strategy='postorder'):
+    if node.is_leaf(): postorder.append(int(node.name))
+print(f'Unused microbes (MetaDR): {set(b3_microbes_data.columns) - set(order)}')
+metaDR_kl_idx = [b3_microbes_data.columns.to_list().index(taxid) for taxid in order]
+metaDR_kp_idx = [b3_microbes_data.columns.to_list().index(taxid) for taxid in postorder]
 
 # breakpoint()
 
