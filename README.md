@@ -13,7 +13,7 @@ In our testing, MicrobeSurv demonstrates not only the best performance among oth
 
 Set up environments:
 ```bash
-conda env create -f microbesurv.yaml
+conda env create -f microbesurv.yml
 conda activate microbesurv
 ```
 
