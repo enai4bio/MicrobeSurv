@@ -5,7 +5,8 @@ Microbes have been linked to approximately 10–20% of human cancers, which can 
 In our testing, MicrobeSurv demonstrates not only the best performance among other previously published methods but also can provide a good interpretability to show contribution of each microbe.
 
 ### Architecture
-![](imgs/model4.png)
+<img src=imgs/model4.png width=30% />
+
 
 
 ### Model Trianing and Experiments Repetition
